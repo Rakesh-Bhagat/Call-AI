@@ -1,0 +1,69 @@
+import asyncio
+import wave
+from pathlib import Path
+from fastapi import APIRouter, WebSocket
+from google.genai import types
+from app.live.session import connect
+
+router = APIRouter()
+
+# Debug: keep the audio we receive from the browser so we can listen to / replay it.
+DEBUG_WAV = Path("logs/last_call_in.wav")
+
+@router.websocket("/ws/browser")
+async def browser_ws(ws: WebSocket):
+    await ws.accept()
+    recorded = bytearray()
+    async with connect() as session:
+
+        async def browser_to_gemini():
+            while True:
+                data = await ws.receive_bytes()
+                recorded.extend(data)
+                await session.send_realtime_input(
+                    audio = types.Blob(data=data, mime_type="audio/pcm;rate=16000")
+                )
+
+        async def gemini_to_browser():
+            while True:
+                async for msg in session.receive():
+                    if msg.go_away:
+                        print("GO_AWAY:", msg.go_away)
+                    sc = msg.server_content
+                    if not sc:
+                        print("MSG:", str(msg)[:200], flush=True)
+                        continue
+                    if sc.interrupted:
+                        print("INTERRUPTED")
+                        await ws.send_json({"type": "interrupted"})
+                    if sc.input_transcription and sc.input_transcription.text:
+                        print("USER:", sc.input_transcription.text)
+                        await ws.send_json({"type": "transcript", "role": "user", "text": sc.input_transcription.text})
+                    if sc.output_transcription and sc.output_transcription.text:
+                        print("BOT:", sc.output_transcription.text)
+                        await ws.send_json({"type": "transcript", "role": "assistant", "text": sc.output_transcription.text})
+                    if sc.turn_complete:
+                        print("TURN COMPLETE")
+                    if sc.model_turn:
+                        for p in sc.model_turn.parts:
+                            if p.inline_data:
+                                await ws.send_bytes(p.inline_data.data)
+
+        tasks = [asyncio.create_task(browser_to_gemini()), asyncio.create_task(gemini_to_browser())]
+
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for r in results:
+            if isinstance(r, Exception) and not isinstance(r, asyncio.CancelledError):
+                print("TASK ERROR:", repr(r), flush=True)
+
+    if recorded:
+        DEBUG_WAV.parent.mkdir(exist_ok=True)
+        with wave.open(str(DEBUG_WAV), "wb") as f:
+            f.setnchannels(1)
+            f.setsampwidth(2)
+            f.setframerate(16000)
+            f.writeframes(bytes(recorded))
+        print(f"saved {DEBUG_WAV} ({len(recorded)} bytes)", flush=True)

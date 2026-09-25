@@ -1,0 +1,15 @@
+[project]
+name = "call-ai"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = "==3.12.*"
+dependencies = [
+    "fastapi>=0.141.1",
+    "google-genai>=2.25.0",
+    "numpy>=2.5.3",
+    "pydantic-settings>=2.15.0",
+    "pytest>=9.1.1",
+    "python-dotenv>=1.2.3",
+    "scipy>=1.18.1",
+]
