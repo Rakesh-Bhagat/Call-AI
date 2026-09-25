@@ -4,6 +4,8 @@ from pathlib import Path
 from fastapi import APIRouter, WebSocket
 from google.genai import types
 from app.live.session import connect
+from app.agent.context import CallContext
+from app.agent.tools import REGISTRY
 
 router = APIRouter()
 
@@ -15,6 +17,7 @@ async def browser_ws(ws: WebSocket):
     await ws.accept()
     recorded = bytearray()
     async with connect() as session:
+        ctx = CallContext()
 
         async def browser_to_gemini():
             while True:
@@ -27,6 +30,18 @@ async def browser_ws(ws: WebSocket):
         async def gemini_to_browser():
             while True:
                 async for msg in session.receive():
+                    if msg.tool_call:
+                        responses = []
+                        for fc in msg.tool_call.function_calls:
+                            fn = REGISTRY.get(fc.name)
+                            try:
+                                result = fn(ctx, **(fc.args or {})) if fn else {"error": f"Unknown tool {fc.name}"}
+                            except Exception as e:
+                                result = {"error": f"Tool failed: {e}"}
+                            print("TOOL:", fc.name, fc.args, "->", result, flush=True)
+                            responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
+
+                        await session.send_tool_response(function_responses=responses)
                     if msg.go_away:
                         print("GO_AWAY:", msg.go_away)
                     sc = msg.server_content
