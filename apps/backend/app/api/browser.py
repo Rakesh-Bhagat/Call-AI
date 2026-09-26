@@ -18,6 +18,21 @@ async def browser_ws(ws: WebSocket):
     recorded = bytearray()
     async with connect() as session:
         ctx = CallContext()
+        ending = False
+        farewell_heard = False
+        call_ended = False
+        watchdog = None
+
+        async def end_call():
+            nonlocal call_ended
+            if call_ended:
+                return
+            call_ended = True
+            await ws.send_json({"type": "call_ended"})
+
+        async def force_end():
+            await asyncio.sleep(20)
+            await end_call()
 
         async def browser_to_gemini():
             while True:
@@ -28,6 +43,7 @@ async def browser_ws(ws: WebSocket):
                 )
 
         async def gemini_to_browser():
+            nonlocal ending, farewell_heard, watchdog
             while True:
                 async for msg in session.receive():
                     if msg.tool_call:
@@ -42,11 +58,16 @@ async def browser_ws(ws: WebSocket):
                             responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
 
                         await session.send_tool_response(function_responses=responses)
+                        if (ctx.escalated or ctx.ended) and not ending:
+                            ending = True
+                            if ctx.escalated:
+                                await ws.send_json({"type": "escalated", "reason": ctx.escalation_reason})
+                            watchdog = asyncio.create_task(force_end())
                     if msg.go_away:
                         print("GO_AWAY:", msg.go_away)
                     sc = msg.server_content
                     if not sc:
-                        print("MSG:", str(msg)[:200], flush=True)
+                        # print("MSG:", str(msg)[:200], flush=True)
                         continue
                     if sc.interrupted:
                         print("INTERRUPTED")
@@ -59,9 +80,13 @@ async def browser_ws(ws: WebSocket):
                         await ws.send_json({"type": "transcript", "role": "assistant", "text": sc.output_transcription.text})
                     if sc.turn_complete:
                         print("TURN COMPLETE")
+                        if ending and farewell_heard:
+                            await end_call()
                     if sc.model_turn:
                         for p in sc.model_turn.parts:
                             if p.inline_data:
+                                if ending:
+                                    farewell_heard = True
                                 await ws.send_bytes(p.inline_data.data)
 
         tasks = [asyncio.create_task(browser_to_gemini()), asyncio.create_task(gemini_to_browser())]
@@ -69,6 +94,8 @@ async def browser_ws(ws: WebSocket):
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for t in pending:
             t.cancel()
+        if watchdog:
+            watchdog.cancel()
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for r in results:
             if isinstance(r, Exception) and not isinstance(r, asyncio.CancelledError):

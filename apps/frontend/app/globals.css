@@ -74,3 +74,10 @@ button:disabled { opacity: 0.5; cursor: default; }
 .log .empty { color: var(--muted); font-size: 0.875rem; margin: auto; }
 .line { font-size: 0.9375rem; line-height: 1.5; }
 .line .who { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; display: block; }
+
+.banner {
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: 0.9375rem;
+}
