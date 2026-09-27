@@ -28,6 +28,7 @@ def test_inbound_frame_becomes_16khz_pcm_and_stop_ends_the_call():
     async def scenario():
         transport = TwillioTransport(FakeWS([START, FRAME, {"event": "stop"}]))
         pcm = await transport.receive_audio()
+        assert pcm is not None
         assert abs(len(pcm) - 640) <= 4
         assert await transport.receive_audio() is None
 
