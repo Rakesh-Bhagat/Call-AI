@@ -20,6 +20,8 @@ class CallSession:
     async def run(self) -> None:
         async with connect() as session:
             self.session = session
+            if getattr(self.transport, "speak_first", False):
+                await session.send_realtime_input(text="The Caller has just connected. Greet them now.")
             tasks = [
                 asyncio.create_task(self._pump_in()),
                 asyncio.create_task(self._pump_out())
